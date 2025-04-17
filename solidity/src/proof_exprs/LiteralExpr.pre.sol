@@ -9,7 +9,10 @@ import "../base/Errors.sol";
 /// @dev Library for handling literal expressions
 library LiteralExpr {
     enum LiteralVariant {
-        BigInt
+        BigInt,
+        Int,
+        SmallInt,
+        TinyInt
     }
 
     /// @notice Evaluates a literal expression
@@ -30,7 +33,10 @@ library LiteralExpr {
     /// 1. The literal variant (as a uint32)
     /// 2. The literal value, which is variant-specific
     ///     a. BigInt: The literal value as a signed int64
-    ///     b. Other variants are unsupported at this time
+    ///     b. Int: The literal value as a signed int32
+    ///     c. SmallInt: The literal value as a signed int16
+    ///     d. TinyInt: The literal value as a signed int8
+    ///     e. Other variants are unsupported at this time
     /// @dev This function evaluates a literal expression by multiplying the literal value by chi_eval.
     /// This is because `chi_eval` is the evaluation of a column of ones of the appropriate length.
     /// @param __expr The literal expression data
@@ -62,6 +68,24 @@ library LiteralExpr {
                     eval :=
                         add(signextend(INT64_SIZE_MINUS_ONE, shr(INT64_PADDING_BITS, calldataload(expr_ptr))), MODULUS)
                     expr_ptr := add(expr_ptr, INT64_SIZE)
+                }
+                case 1 {
+                    case_const(1, LITERAL_INT_VARIANT)
+                    eval :=
+                        add(signextend(INT32_SIZE_MINUS_ONE, shr(INT32_PADDING_BITS, calldataload(expr_ptr))), MODULUS)
+                    expr_ptr := add(expr_ptr, INT32_SIZE)
+                }
+                case 2 {
+                    case_const(2, LITERAL_SMALLINT_VARIANT)
+                    eval :=
+                        add(signextend(INT16_SIZE_MINUS_ONE, shr(INT16_PADDING_BITS, calldataload(expr_ptr))), MODULUS)
+                    expr_ptr := add(expr_ptr, INT16_SIZE)
+                }
+                case 3 {
+                    case_const(3, LITERAL_TINYINT_VARIANT)
+                    eval :=
+                        add(signextend(INT8_SIZE_MINUS_ONE, shr(INT8_PADDING_BITS, calldataload(expr_ptr))), MODULUS)
+                    expr_ptr := add(expr_ptr, INT8_SIZE)
                 }
                 default { err(ERR_UNSUPPORTED_LITERAL_VARIANT) }
                 eval := mulmod(eval, chi_eval, MODULUS)
