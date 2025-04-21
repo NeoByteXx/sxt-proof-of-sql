@@ -242,7 +242,7 @@ impl BaseEntry for ComplexCondition {
             ),
             (
                 "c",
-                ColumnType::Int128,
+                ColumnType::SmallInt,
                 Some(|size| (size / 10).max(10) as i64),
             ),
             ("d", ColumnType::VarChar, None),
