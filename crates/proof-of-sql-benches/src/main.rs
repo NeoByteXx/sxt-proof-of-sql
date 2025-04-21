@@ -62,6 +62,7 @@ use proof_of_sql::{
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{path::PathBuf, time::Instant};
+use tracing::{span, Level};
 mod utils;
 use utils::{
     benchmark_accessor::BenchmarkAccessor,
@@ -225,6 +226,15 @@ fn bench_by_schema<'a, C, CP>(
             QueryExpr::try_new(query.parse().unwrap(), "bench".into(), &accessor).unwrap();
 
         for i in 0..cli.iterations {
+            let span = span!(
+                Level::DEBUG,
+                "prove and verify",
+                schema = schema,
+                query = title,
+                table_size = cli.table_size
+            )
+            .entered();
+
             // Generate the proof
             let time = Instant::now();
             let result: VerifiableQueryResult<CP> = VerifiableQueryResult::new(
@@ -244,6 +254,8 @@ fn bench_by_schema<'a, C, CP>(
                 .verify(query_expr.proof_expr(), &accessor, &verifier_setup, params)
                 .unwrap();
             let verify_elapsed = time.elapsed().as_millis();
+
+            span.exit();
 
             // Append results to CSV file
             if let Some(csv_path) = &cli.csv_path {
@@ -279,6 +291,7 @@ fn bench_by_schema<'a, C, CP>(
 /// # Arguments
 /// * `cli` - A reference to the command line interface arguments.
 /// * `queries` - A slice of query entries to benchmark.
+#[tracing::instrument(name = "Inner Product Proof", level = "debug", skip_all)]
 fn bench_inner_product_proof(cli: &Cli, queries: &[QueryEntry]) {
     bench_by_schema::<RistrettoPoint, InnerProductProof>(
         "Inner Product Proof",
@@ -342,12 +355,15 @@ fn load_dory_setup<'a>(
 /// # Arguments
 /// * `cli` - A reference to the command line interface arguments.
 /// * `queries` - A slice of query entries to benchmark.
+#[tracing::instrument(name = "Dory", level = "debug", skip_all)]
 fn bench_dory(cli: &Cli, queries: &[QueryEntry]) {
+    let span = span!(Level::DEBUG, "setup", sigma = cli.nu_sigma).entered();
     let public_parameters = load_dory_public_parameters(cli);
     let (prover_setup, verifier_setup) = load_dory_setup(&public_parameters, cli);
 
     let prover_public_setup = DoryProverPublicSetup::new(&prover_setup, cli.nu_sigma);
     let verifier_public_setup = DoryVerifierPublicSetup::new(&verifier_setup, cli.nu_sigma);
+    span.exit();
 
     bench_by_schema::<DoryCommitment, DoryEvaluationProof>(
         "Dory",
@@ -365,9 +381,12 @@ fn bench_dory(cli: &Cli, queries: &[QueryEntry]) {
 /// # Arguments
 /// * `cli` - A reference to the command line interface arguments.
 /// * `queries` - A slice of query entries to benchmark.
+#[tracing::instrument(name = "Dynamic Dory", level = "debug", skip_all)]
 fn bench_dynamic_dory(cli: &Cli, queries: &[QueryEntry]) {
+    let span = span!(Level::DEBUG, "setup", nu = cli.nu_sigma).entered();
     let public_parameters = load_dory_public_parameters(cli);
     let (prover_setup, verifier_setup) = load_dory_setup(&public_parameters, cli);
+    span.exit();
 
     bench_by_schema::<DynamicDoryCommitment, DynamicDoryEvaluationProof>(
         "Dynamic Dory",
@@ -388,7 +407,9 @@ fn bench_dynamic_dory(cli: &Cli, queries: &[QueryEntry]) {
 ///
 /// # Panics
 /// * The optional file cannot be loaded.
+#[tracing::instrument(name = "HyperKZG", level = "debug", skip_all)]
 fn bench_hyperkzg(cli: &Cli, queries: &[QueryEntry]) {
+    let span = span!(Level::DEBUG, "setup",).entered();
     // Load the prover setup and verification key
     let (prover_setup, vk) = if let Some(ppot_file_path) = &cli.ppot_path {
         let file = std::fs::File::open(ppot_file_path).unwrap();
@@ -413,6 +434,7 @@ fn bench_hyperkzg(cli: &Cli, queries: &[QueryEntry]) {
         let prover_setup = nova_commitment_key_to_hyperkzg_public_setup(&ck);
         (prover_setup, vk)
     };
+    span.exit();
 
     bench_by_schema::<HyperKZGCommitment, HyperKZGCommitmentEvaluationProof>(
         "HyperKZG",
