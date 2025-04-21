@@ -64,6 +64,8 @@ uint32 constant SUBTRACT_EXPR_VARIANT = 4;
 
 /// @dev Filter variant constant for proof plans
 uint32 constant FILTER_EXEC_VARIANT = 0;
+/// @dev Group By variant constant for proof plans
+uint32 constant GROUP_BY_EXEC_VARIANT = 1;
 
 /// @dev BigInt variant constant for literal expressions
 uint32 constant LITERAL_BIGINT_VARIANT = 0;
