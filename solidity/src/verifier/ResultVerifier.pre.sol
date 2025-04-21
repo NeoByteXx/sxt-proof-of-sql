@@ -47,7 +47,83 @@ library ResultVerifier {
                 revert(0, 0)
             }
 
+            // Read and validate entry based on column variant
+            function read_entry(result_ptr, column_variant) -> entry, updated_ptr {
+                updated_ptr := result_ptr
+                switch column_variant
+                case 0 {
+                    case_const(0, COLUMN_BIGINT_VARIANT)
+                    entry :=
+                        add(MODULUS, signextend(INT64_SIZE_MINUS_ONE, shr(INT64_PADDING_BITS, calldataload(result_ptr))))
+                    updated_ptr := add(result_ptr, INT64_SIZE)
+                }
+                case 1 {
+                    case_const(1, COLUMN_INT_VARIANT)
+                    entry :=
+                        add(MODULUS, signextend(INT32_SIZE_MINUS_ONE, shr(INT32_PADDING_BITS, calldataload(result_ptr))))
+                    updated_ptr := add(result_ptr, INT32_SIZE)
+                }
+                case 2 {
+                    case_const(2, COLUMN_SMALLINT_VARIANT)
+                    entry :=
+                        add(MODULUS, signextend(INT16_SIZE_MINUS_ONE, shr(INT16_PADDING_BITS, calldataload(result_ptr))))
+                    updated_ptr := add(result_ptr, INT16_SIZE)
+                }
+                case 3 {
+                    case_const(3, COLUMN_TINYINT_VARIANT)
+                    entry :=
+                        add(MODULUS, signextend(INT8_SIZE_MINUS_ONE, shr(INT8_PADDING_BITS, calldataload(result_ptr))))
+                    updated_ptr := add(result_ptr, INT8_SIZE)
+                }
+            }
+
+            // Parse column metadata
+            function parse_column_metadata(result_ptr) -> column_variant, column_length, updated_ptr {
+                // Skip column name
+                let name_length := shr(UINT64_PADDING_BITS, calldataload(result_ptr))
+                result_ptr := add(result_ptr, add(UINT64_SIZE, name_length))
+                if byte(0, calldataload(result_ptr)) { err(ERR_INVALID_RESULT_COLUMN_NAME) }
+                result_ptr := add(result_ptr, 1)
+
+                // Read column variant
+                column_variant := shr(UINT32_PADDING_BITS, calldataload(result_ptr))
+                result_ptr := add(result_ptr, UINT32_SIZE)
+
+                // Read column length
+                column_length := shr(UINT64_PADDING_BITS, calldataload(result_ptr))
+                updated_ptr := add(result_ptr, UINT64_SIZE)
+            }
+
+            // Validate column variant
+            function validate_column_variant(column_variant) {
+                switch column_variant
+                case 0 { case_const(0, COLUMN_BIGINT_VARIANT) }
+                case 1 { case_const(1, COLUMN_INT_VARIANT) }
+                case 2 { case_const(2, COLUMN_SMALLINT_VARIANT) }
+                case 3 { case_const(3, COLUMN_TINYINT_VARIANT) }
+                default { err(ERR_UNSUPPORTED_COLUMN_VARIANT) }
+            }
+
+            // Compute and verify the result for a single column
+            function verify_column(result_ptr, column_variant, column_length, table_len, value, eval_vec) ->
+                new_result_ptr
+            {
+                value := mulmod(MODULUS_MINUS_ONE, value, MODULUS)
+
+                for { let i := 0 } sub(table_len, i) { i := add(i, 1) } {
+                    let entry, updated_ptr := read_entry(result_ptr, column_variant)
+                    result_ptr := updated_ptr
+
+                    value := addmod(value, mulmod(entry, mload(add(eval_vec, mul(i, WORD_SIZE))), MODULUS), MODULUS)
+                }
+
+                if value { err(ERR_INCORRECT_RESULT) }
+                new_result_ptr := result_ptr
+            }
+
+            // Main verification function
             function verify_result_evaluations(result_ptr, evaluation_point_ptr, evaluations_ptr) {
+                // Validate column count
                 let num_columns := shr(UINT64_PADDING_BITS, calldataload(result_ptr))
                 result_ptr := add(result_ptr, UINT64_SIZE)
                 if sub(num_columns, mload(evaluations_ptr)) { err(ERR_RESULT_COLUMN_COUNT_MISMATCH) }
@@ -56,77 +132,31 @@ library ResultVerifier {
                 let first := 1
                 let table_len
                 let eval_vec
-                for {} num_columns { num_columns := sub(num_columns, 1) } {
-                    let name_length := shr(UINT64_PADDING_BITS, calldataload(result_ptr))
-                    result_ptr := add(result_ptr, add(UINT64_SIZE, name_length))
-                    if byte(0, calldataload(result_ptr)) { err(ERR_INVALID_RESULT_COLUMN_NAME) }
-                    result_ptr := add(result_ptr, 1)
 
+                for {} num_columns { num_columns := sub(num_columns, 1) } {
+                    // Parse column metadata
+                    let column_variant, column_length, updated_ptr := parse_column_metadata(result_ptr)
+                    result_ptr := updated_ptr
+
+                    // Get expected evaluation value
                     let value := mload(evaluations_ptr)
                     evaluations_ptr := add(evaluations_ptr, WORD_SIZE)
-                    let column_variant := shr(UINT32_PADDING_BITS, calldataload(result_ptr))
-                    result_ptr := add(result_ptr, UINT32_SIZE)
 
-                    let column_length := shr(UINT64_PADDING_BITS, calldataload(result_ptr))
-                    result_ptr := add(result_ptr, UINT64_SIZE)
+                    // Validate column variant
+                    validate_column_variant(column_variant)
 
-                    switch column_variant
-                    case 0 { case_const(0, COLUMN_BIGINT_VARIANT) }
-                    case 1 { case_const(1, COLUMN_INT_VARIANT) }
-                    case 2 { case_const(2, COLUMN_SMALLINT_VARIANT) }
-                    case 3 { case_const(3, COLUMN_TINYINT_VARIANT) }
-                    default { err(ERR_UNSUPPORTED_COLUMN_VARIANT) }
-
+                    // Initialize evaluation vector on first column
                     if first {
                         first := 0
                         table_len := column_length
                         eval_vec := compute_evaluation_vec(table_len, evaluation_point_ptr)
                     }
+
+                    // Check column length consistency
                     if sub(table_len, column_length) { err(ERR_INCONSISTENT_RESULT_COLUMN_LENGTHS) }
 
-                    value := mulmod(MODULUS_MINUS_ONE, value, MODULUS)
-                    for { let i := 0 } sub(table_len, i) { i := add(i, 1) } {
-                        let entry
-                        switch column_variant
-                        case 0 {
-                            case_const(0, COLUMN_BIGINT_VARIANT)
-                            entry :=
-                                add(
-                                    MODULUS,
-                                    signextend(INT64_SIZE_MINUS_ONE, shr(INT64_PADDING_BITS, calldataload(result_ptr)))
-                                )
-                            result_ptr := add(result_ptr, INT64_SIZE)
-                        }
-                        case 1 {
-                            case_const(1, COLUMN_INT_VARIANT)
-                            entry :=
-                                add(
-                                    MODULUS,
-                                    signextend(INT32_SIZE_MINUS_ONE, shr(INT32_PADDING_BITS, calldataload(result_ptr)))
-                                )
-                            result_ptr := add(result_ptr, INT32_SIZE)
-                        }
-                        case 2 {
-                            case_const(2, COLUMN_SMALLINT_VARIANT)
-                            entry :=
-                                add(
-                                    MODULUS,
-                                    signextend(INT16_SIZE_MINUS_ONE, shr(INT16_PADDING_BITS, calldataload(result_ptr)))
-                                )
-                            result_ptr := add(result_ptr, INT16_SIZE)
-                        }
-                        case 3 {
-                            case_const(3, COLUMN_TINYINT_VARIANT)
-                            entry :=
-                                add(
-                                    MODULUS,
-                                    signextend(INT8_SIZE_MINUS_ONE, shr(INT8_PADDING_BITS, calldataload(result_ptr)))
-                                )
-                            result_ptr := add(result_ptr, INT8_SIZE)
-                        }
-                        value := addmod(value, mulmod(entry, mload(add(eval_vec, mul(i, WORD_SIZE))), MODULUS), MODULUS)
-                    }
-                    if value { err(ERR_INCORRECT_RESULT) }
+                    // Verify this column
+                    result_ptr := verify_column(result_ptr, column_variant, column_length, table_len, value, eval_vec)
                 }
             }
             verify_result_evaluations(__result.offset, __evaluationPoint, __evaluations)

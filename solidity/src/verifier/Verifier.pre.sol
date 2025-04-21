@@ -440,6 +440,28 @@ library Verifier {
             }
 
             // IMPORT-YUL ResultVerifier.pre.sol
+            function read_entry(result_ptr, column_variant) -> entry, updated_ptr {
+                revert(0, 0)
+            }
+
+            // IMPORT-YUL ResultVerifier.pre.sol
+            function parse_column_metadata(result_ptr) -> column_variant, column_length, updated_ptr {
+                revert(0, 0)
+            }
+
+            // IMPORT-YUL ResultVerifier.pre.sol
+            function validate_column_variant(column_variant) {
+                revert(0, 0)
+            }
+
+            // IMPORT-YUL ResultVerifier.pre.sol
+            function verify_column(result_ptr, column_variant, column_length, table_len, value, eval_vec) ->
+                new_result_ptr
+            {
+                revert(0, 0)
+            }
+
+            // IMPORT-YUL ResultVerifier.pre.sol
             function verify_result_evaluations(result_ptr, evaluation_point_ptr, evaluations_ptr) {
                 revert(0, 0)
             }
