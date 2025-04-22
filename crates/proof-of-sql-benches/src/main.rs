@@ -298,10 +298,9 @@ fn bench_by_schema<'a, C, CP>(
 /// * `queries` - A slice of query entries to benchmark.
 #[tracing::instrument(name = "Inner Product Proof", level = "debug", skip_all)]
 fn bench_inner_product_proof(cli: &Cli, queries: &[QueryEntry]) {
-    let alloc = Bump::new();
     bench_by_schema::<RistrettoPoint, InnerProductProof>(
         "Inner Product Proof",
-        &alloc,
+        &Bump::new(),
         cli,
         queries,
         (),
@@ -370,10 +369,9 @@ fn bench_dory(cli: &Cli, queries: &[QueryEntry]) {
     let verifier_public_setup = DoryVerifierPublicSetup::new(&verifier_setup, cli.nu_sigma);
     span.exit();
 
-    let alloc = Bump::new();
     bench_by_schema::<DoryCommitment, DoryEvaluationProof>(
         "Dory",
-        &alloc,
+        &Bump::new(),
         cli,
         queries,
         prover_public_setup,
@@ -393,10 +391,9 @@ fn bench_dynamic_dory(cli: &Cli, queries: &[QueryEntry]) {
     let (prover_setup, verifier_setup) = load_dory_setup(&public_parameters, cli);
     span.exit();
 
-    let alloc = Bump::new();
     bench_by_schema::<DynamicDoryCommitment, DynamicDoryEvaluationProof>(
         "Dynamic Dory",
-        &alloc,
+        &Bump::new(),
         cli,
         queries,
         &prover_setup,
@@ -441,10 +438,9 @@ fn bench_hyperkzg(cli: &Cli, queries: &[QueryEntry]) {
     };
     span.exit();
 
-    let alloc = Bump::new();
     bench_by_schema::<HyperKZGCommitment, HyperKZGCommitmentEvaluationProof>(
         "HyperKZG",
-        &alloc,
+        &Bump::new(),
         cli,
         queries,
         &prover_setup,
