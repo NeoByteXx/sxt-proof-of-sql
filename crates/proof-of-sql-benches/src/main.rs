@@ -300,7 +300,7 @@ fn bench_by_schema<'a, C, CP>(
 fn bench_inner_product_proof(cli: &Cli, queries: &[QueryEntry]) {
     let alloc = Bump::new();
     bench_by_schema::<RistrettoPoint, InnerProductProof>(
-        "Inner Product Proof NEW",
+        "Inner Product Proof",
         &alloc,
         cli,
         queries,
@@ -372,7 +372,7 @@ fn bench_dory(cli: &Cli, queries: &[QueryEntry]) {
 
     let alloc = Bump::new();
     bench_by_schema::<DoryCommitment, DoryEvaluationProof>(
-        "Dory NEW",
+        "Dory",
         &alloc,
         cli,
         queries,
@@ -395,7 +395,7 @@ fn bench_dynamic_dory(cli: &Cli, queries: &[QueryEntry]) {
 
     let alloc = Bump::new();
     bench_by_schema::<DynamicDoryCommitment, DynamicDoryEvaluationProof>(
-        "Dynamic Dory NEW",
+        "Dynamic Dory",
         &alloc,
         cli,
         queries,
@@ -443,7 +443,7 @@ fn bench_hyperkzg(cli: &Cli, queries: &[QueryEntry]) {
 
     let alloc = Bump::new();
     bench_by_schema::<HyperKZGCommitment, HyperKZGCommitmentEvaluationProof>(
-        "HyperKZG NEW",
+        "HyperKZG",
         &alloc,
         cli,
         queries,
