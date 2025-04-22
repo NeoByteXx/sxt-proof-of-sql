@@ -1,10 +1,7 @@
 use bumpalo::Bump;
 use indexmap::{indexmap, IndexMap};
 use proof_of_sql::base::{
-    database::{
-        table_utility::table,
-        Column, ColumnType, Table, TableRef,
-    },
+    database::{table_utility::table, Column, ColumnType, Table, TableRef},
     scalar::Scalar,
 };
 use rand::Rng;
@@ -15,7 +12,11 @@ pub type OptionalRandBound = Option<fn(usize) -> i64>;
 ///
 /// Will panic if:
 /// - An unsupported `ColumnType` is encountered, triggering a panic in the `todo!()` macro.
-#[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, clippy::too_many_lines)]
+#[expect(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines
+)]
 pub fn generate_random_columns<'a, S: Scalar>(
     alloc: &'a Bump,
     rng: &mut impl Rng,
@@ -149,14 +150,13 @@ pub fn generate_random_columns<'a, S: Scalar>(
 
 /// Generates a random table with the specified name and columns
 pub fn generate_random_table<'a, S: Scalar>(
-    table_name: &str,
     alloc: &'a Bump,
     rng: &mut impl Rng,
     columns: &[(&str, ColumnType, OptionalRandBound)],
     num_rows: usize,
 ) -> IndexMap<TableRef, Table<'a, S>> {
     indexmap! {
-        TableRef::from_names(None, table_name) => table(
+        TableRef::from_names(None, "bench_table") => table(
             generate_random_columns(alloc, rng, columns, num_rows)
         )
     }
