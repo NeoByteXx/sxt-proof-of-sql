@@ -1,20 +1,23 @@
 #![expect(clippy::cast_possible_wrap)]
 use super::OptionalRandBound;
-use proof_of_sql::base::database::ColumnType;
+use proof_of_sql::base::{database::{ColumnType, LiteralValue}, math::decimal::Precision, posql_time::{PoSQLTimeUnit, PoSQLTimeZone}};
 
 /// Type alias for a single column definition in a query.
 type ColumnDefinition = (&'static str, ColumnType, OptionalRandBound);
 
 /// Type alias for a single query entry.
-pub type QueryEntry = (&'static str, &'static str, &'static [ColumnDefinition]);
+pub type QueryEntry = (&'static str, &'static str, Vec<ColumnDefinition>, Vec<LiteralValue>);
 
 /// Trait for defining a base query.
 pub trait BaseEntry {
     fn title(&self) -> &'static str;
     fn sql(&self) -> &'static str;
-    fn columns(&self) -> &'static [ColumnDefinition];
+    fn columns(&self) -> Vec<ColumnDefinition>;
+    fn params(&self) -> Vec<LiteralValue> {
+        vec![]
+    }
     fn entry(&self) -> QueryEntry {
-        (self.title(), self.sql(), self.columns())
+        (self.title(), self.sql(), self.columns(), self.params())
     }
 }
 
@@ -29,8 +32,8 @@ impl BaseEntry for SingleColumnFilter {
         "SELECT b FROM table WHERE a = 0"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             (
                 "a",
                 ColumnType::BigInt,
@@ -52,8 +55,8 @@ impl BaseEntry for MultiColumnFilter {
         "SELECT * FROM table WHERE ((a = 0) or (b = 1)) and (not (c = 'a'))"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             (
                 "a",
                 ColumnType::BigInt,
@@ -80,8 +83,8 @@ impl BaseEntry for Arithmetic {
         "SELECT a + b as r0, a * b - 2 as r1, c FROM table WHERE a <= b AND a >= 0"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             (
                 "a",
                 ColumnType::BigInt,
@@ -108,8 +111,8 @@ impl BaseEntry for GroupBy {
         "SELECT a, COUNT(*) FROM table WHERE (c = TRUE) and (a <= b) and (a > 0) GROUP BY a"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             (
                 "a",
                 ColumnType::Int128,
@@ -136,8 +139,8 @@ impl BaseEntry for Aggregate {
         "SELECT SUM(a) FROM table WHERE b = a OR c = 'yz'"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             (
                 "a",
                 ColumnType::BigInt,
@@ -164,8 +167,8 @@ impl BaseEntry for BooleanFilter {
         "SELECT * FROM table WHERE c = TRUE and b = 'xyz' or a = 0"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             (
                 "a",
                 ColumnType::BigInt,
@@ -188,8 +191,8 @@ impl BaseEntry for LargeColumnSet {
         "SELECT * FROM table WHERE b = d"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             ("a", ColumnType::Boolean, None),
             (
                 "b",
@@ -228,8 +231,8 @@ impl BaseEntry for ComplexCondition {
         "SELECT * FROM table WHERE (a > c * c AND b < c + 10) OR (d = 'xyz')"
     }
 
-    fn columns(&self) -> &'static [ColumnDefinition] {
-        &[
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
             (
                 "a",
                 ColumnType::BigInt,
@@ -250,6 +253,89 @@ impl BaseEntry for ComplexCondition {
     }
 }
 
+/// Sum Count query.
+pub struct SumCount;
+impl BaseEntry for SumCount {
+    fn title(&self) -> &'static str {
+        "Sum Count"
+    }
+
+    fn sql(&self) -> &'static str {
+        "SELECT SUM(a*b*c) as foo, SUM(a*b) as bar, COUNT(1) FROM table WHERE a = 0 OR c-b = 2 AND d = 'a'"
+    }
+
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
+            (
+                "a",
+                ColumnType::BigInt,
+                Some(|size| (size / 10).max(10) as i64),
+            ),
+            (
+                "b",
+                ColumnType::BigInt,
+                Some(|size| (size / 10).max(10) as i64),
+            ),
+            (
+                "c",
+                ColumnType::BigInt,
+                Some(|size| (size / 10).max(10) as i64),
+            ),
+            ("d", ColumnType::VarChar, None),
+        ]
+    }
+}
+
+/// Coin query.
+pub struct Coin;
+impl BaseEntry for Coin {
+    fn title(&self) -> &'static str {
+        "Coin"
+    }
+
+    fn sql(&self) -> &'static str {
+        "SELECT 
+        SUM( 
+        (
+            CAST (to_address = $1 as bigint)
+            - CAST (from_address = $1 as bigint)
+        )
+        * value
+        * CAST(timestamp AS bigint)
+        ) AS weighted_value,
+        SUM( 
+        (
+            CAST (to_address = $1 as bigint)
+            - CAST (from_address = $1 as bigint)
+        )
+        * value
+        ) AS total_balance,
+        COUNT(1) AS num_transactions
+        FROM transactions;"
+    }
+    
+    fn columns(&self) -> Vec<ColumnDefinition> {
+        vec![
+            ("from_address", ColumnType::VarChar, None),
+            ("to_address", ColumnType::VarChar, None),
+            (
+                "value",
+                ColumnType::Decimal75(Precision::new(75).unwrap(), 0),
+                None,
+            ),
+            (
+                "timestamp",
+                ColumnType::TimestampTZ(PoSQLTimeUnit::Second, PoSQLTimeZone::utc()),
+                None,
+            ),
+        ]
+    }
+
+    fn params(&self) -> Vec<LiteralValue> {
+        vec![LiteralValue::VarChar("a".to_string())]
+    }
+}
+
 /// Retrieves all available queries.
 pub fn all_queries() -> Vec<QueryEntry> {
     vec![
@@ -261,6 +347,8 @@ pub fn all_queries() -> Vec<QueryEntry> {
         BooleanFilter.entry(),
         LargeColumnSet.entry(),
         ComplexCondition.entry(),
+        SumCount.entry(),
+        Coin.entry(),
     ]
 }
 
@@ -275,5 +363,5 @@ pub fn all_queries() -> Vec<QueryEntry> {
 pub fn get_query(title: &str) -> Option<QueryEntry> {
     all_queries()
         .into_iter()
-        .find(|(query_title, _, _)| *query_title == title)
+        .find(|(query_title, _, _, _)| *query_title == title)
 }

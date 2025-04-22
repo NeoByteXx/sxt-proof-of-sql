@@ -33,7 +33,9 @@ use blitzar::{compute::init_backend, proof::InnerProductProof};
 use bumpalo::Bump;
 use clap::{ArgAction, Parser, ValueEnum};
 use curve25519_dalek::RistrettoPoint;
+use datafusion::config::ConfigOptions;
 use halo2curves::bn256::G2Affine;
+use indexmap::IndexMap;
 use nova_snark::{
     provider::{
         bn256_grumpkin::bn256::Affine,
@@ -44,7 +46,9 @@ use nova_snark::{
 use proof_of_sql::{
     base::{
         commitment::{Commitment, CommitmentEvaluationProof},
-        database::LiteralValue,
+        database::{
+            LiteralValue, Table, TableRef, TableTestAccessor, TestAccessor,
+        },
     },
     proof_primitive::{
         dory::{
@@ -60,15 +64,17 @@ use proof_of_sql::{
     },
     sql::{parse::QueryExpr, proof::VerifiableQueryResult},
 };
+use proof_of_sql_planner::sql_to_proof_plans;
 use rand::{rngs::StdRng, SeedableRng};
+use sqlparser::dialect::GenericDialect;
 use std::{path::PathBuf, time::Instant};
 use tracing::{span, Level};
 mod utils;
 use utils::{
     benchmark_accessor::BenchmarkAccessor,
     jaeger_setup::{setup_jaeger_tracing, stop_jaeger_tracing},
-    queries::{all_queries, get_query, QueryEntry},
-    random_util::generate_random_columns,
+    queries::{all_queries, get_query, BaseEntry, Coin, QueryEntry},
+    random_util::{generate_random_columns, generate_random_table},
     results_io::append_to_csv,
 };
 
@@ -108,6 +114,8 @@ enum Query {
     LargeColumnSet,
     /// Complex condition query
     ComplexCondition,
+    /// Sum count query
+    SumCount,
 }
 
 impl Query {
@@ -123,6 +131,7 @@ impl Query {
             Query::BooleanFilter => "Boolean Filter",
             Query::LargeColumnSet => "Large Column Set",
             Query::ComplexCondition => "Complex Condition",
+            Query::SumCount => "Sum Count",
         }
     }
 }
@@ -192,6 +201,96 @@ fn get_rng(cli: &Cli) -> StdRng {
     }
 }
 
+/// # Panics
+/// This function will panic if anything goes wrong
+#[tracing::instrument(name = "HyperKZG Coin", level = "debug", skip_all)]
+fn run_new_bench<'a, C, CP>(
+    schema: &str,
+    alloc: &'a Bump,
+    cli: &Cli,
+    queries: &[QueryEntry],
+    prover_setup: CP::ProverPublicSetup<'a>,
+    verifier_setup: CP::VerifierPublicSetup<'_>,
+) where
+C: Commitment,
+CP: CommitmentEvaluationProof<Commitment = C, Scalar = C::Scalar>, <C as Commitment>::Scalar: 'a
+{
+    for (query, sql, columns, params) in queries {
+        let tables = {
+            let mut rng = get_rng(cli);
+            generate_random_table::<C::Scalar>(
+                "transactions",
+                alloc,
+                &mut rng,
+                columns,
+                cli.table_size,
+            )
+        };
+
+        // Get accessor
+        let accessor: TableTestAccessor<'a, CP> = new_test_accessor(&tables, prover_setup);
+        let config = ConfigOptions::default();
+        let statements = sqlparser::parser::Parser::parse_sql(&GenericDialect {}, sql).unwrap();
+        let plans = sql_to_proof_plans(&statements, &accessor, &config).unwrap();
+
+        // Prove and verify the plans
+        for plan in plans {
+            for i in 0..cli.iterations {
+                let span = span!(
+                    Level::DEBUG,
+                    "prove and verify",
+                    schema = schema,
+                    query = query,
+                    table_size = cli.table_size
+                )
+                .entered();
+
+                // Generate the proof
+                let time = Instant::now();
+                let res =
+                    VerifiableQueryResult::<CP>::new(&plan, &accessor, &prover_setup, params).unwrap();
+                let generate_proof_elapsed = time.elapsed().as_millis();
+
+                let num_query_results = res.result.num_rows();
+
+                // Verify the proof
+                let time = Instant::now();
+                res.verify(&plan, &accessor, &verifier_setup, params)
+                    .unwrap();
+                let verify_elapsed = time.elapsed().as_millis();
+
+                span.exit();
+
+                // Append results to CSV file
+                if let Some(csv_path) = &cli.csv_path {
+                    append_to_csv(
+                        csv_path,
+                        &[
+                            schema.to_string(),
+                            (*query).to_string(),
+                            cli.table_size.to_string(),
+                            generate_proof_elapsed.to_string(),
+                            verify_elapsed.to_string(),
+                            i.to_string(),
+                        ],
+                    );
+                }
+
+                // Print results to console
+                if !cli.silence {
+                    eprintln!("Number of query results: {num_query_results}");
+                    eprintln!("{schema} - generate proof: {generate_proof_elapsed} ms");
+                    eprintln!("{schema} - verify proof: {verify_elapsed} ms");
+                    println!(
+                        "{schema},{query},{},{generate_proof_elapsed},{verify_elapsed},{i}",
+                        cli.table_size
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Benchmarks the specified commitment scheme.
 ///
 /// # Panics
@@ -216,7 +315,7 @@ fn bench_by_schema<'a, C, CP>(
     let mut rng = get_rng(cli);
     let alloc = Bump::new();
 
-    for (title, query, columns) in queries {
+    for (title, query, columns, _) in queries {
         accessor.insert_table(
             "bench.table".parse().unwrap(),
             &generate_random_columns(&alloc, &mut rng, columns, cli.table_size),
@@ -302,6 +401,16 @@ fn bench_inner_product_proof(cli: &Cli, queries: &[QueryEntry]) {
         (),
         &[],
     );
+
+    let alloc = Bump::new();
+    run_new_bench::<RistrettoPoint, InnerProductProof>(
+        "Inner Product Proof NEW",
+        &alloc,
+        cli,
+        queries,
+        (),
+        (),
+    );
 }
 
 /// Loads the Dory public parameters.
@@ -374,6 +483,16 @@ fn bench_dory(cli: &Cli, queries: &[QueryEntry]) {
         verifier_public_setup,
         &[],
     );
+
+    let alloc = Bump::new();
+    run_new_bench::<DoryCommitment, DoryEvaluationProof>(
+        "Dory NEW",
+        &alloc,
+        cli,
+        queries,
+        prover_public_setup,
+        verifier_public_setup,
+    );
 }
 
 /// Benchmarks the `DynamicDory` scheme.
@@ -396,6 +515,16 @@ fn bench_dynamic_dory(cli: &Cli, queries: &[QueryEntry]) {
         &prover_setup,
         &verifier_setup,
         &[],
+    );
+
+    let alloc = Bump::new();
+    run_new_bench::<DynamicDoryCommitment, DynamicDoryEvaluationProof>(
+        "Dynamic Dory NEW",
+        &alloc,
+        cli,
+        queries,
+        &prover_setup,
+        &verifier_setup,
     );
 }
 
@@ -445,7 +574,79 @@ fn bench_hyperkzg(cli: &Cli, queries: &[QueryEntry]) {
         &vk,
         &[],
     );
+
+    let alloc = Bump::new();
+    run_new_bench::<HyperKZGCommitment, HyperKZGCommitmentEvaluationProof>(
+        "HyperKZG NEW",
+        &alloc,
+        cli,
+        queries,
+        &prover_setup,
+        &vk,
+    );
 }
+
+
+
+
+/// Get a new `TableTestAccessor` with the provided tables
+fn new_test_accessor<'a, CP: CommitmentEvaluationProof>(
+    tables: &IndexMap<TableRef, Table<'a, CP::Scalar>>,
+    prover_setup: CP::ProverPublicSetup<'a>,
+) -> TableTestAccessor<'a, CP> {
+    let mut accessor = TableTestAccessor::<CP>::new_empty_with_setup(prover_setup);
+    for (table_ref, table) in tables {
+        accessor.add_table(table_ref.clone(), table.clone(), 0);
+    }
+    accessor
+}
+
+/// # Panics
+/// This function will panic if anything goes wrong
+fn bench_coin(cli: &Cli) {
+    // Load the prover setup and verification key
+    let (prover_setup, vk) = if let Some(ppot_file_path) = &cli.ppot_path {
+        let file = std::fs::File::open(ppot_file_path).unwrap();
+        let prover_setup =
+            deserialize_flat_compressed_hyperkzg_public_setup_from_reader(&file, Validate::Yes)
+                .unwrap();
+
+        let ck: CommitmentKey<HyperKZGEngine> = CommitmentKey::new(
+            prover_setup
+                .iter()
+                .map(blitzar::compute::convert_to_halo2_bn256_g1_affine)
+                .collect(),
+            Affine::default(),
+            G2Affine::default(),
+        );
+        let (_, vk): (
+            nova_snark::provider::hyperkzg::ProverKey<HyperKZGEngine>,
+            nova_snark::provider::hyperkzg::VerifierKey<HyperKZGEngine>,
+        ) = EvaluationEngine::setup(&ck);
+
+        (prover_setup, vk)
+    } else {
+        let ck: CommitmentKey<HyperKZGEngine> = CommitmentEngine::setup(b"bench", cli.table_size);
+        let (_, vk) = EvaluationEngine::setup(&ck);
+        let prover_setup = nova_commitment_key_to_hyperkzg_public_setup(&ck);
+        (prover_setup, vk)
+    };
+
+    let alloc = Bump::new();
+
+    run_new_bench::<HyperKZGCommitment, HyperKZGCommitmentEvaluationProof>(
+        "HyperKZG",
+        &alloc,
+        cli,
+        &[Coin.entry()],
+        &prover_setup,
+        &vk,
+    );
+}
+
+
+
+
 
 /// The main function wrapping the traces.
 ///
@@ -495,7 +696,8 @@ fn main() {
             bench_dynamic_dory(&cli, &queries);
         }
         CommitmentScheme::HyperKZG => {
-            bench_hyperkzg(&cli, &queries);
+            bench_coin(&cli);
+            //bench_hyperkzg(&cli, &queries);
         }
     }
 

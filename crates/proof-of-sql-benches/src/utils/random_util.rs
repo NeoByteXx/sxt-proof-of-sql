@@ -1,6 +1,10 @@
 use bumpalo::Bump;
+use indexmap::{indexmap, IndexMap};
 use proof_of_sql::base::{
-    database::{Column, ColumnType},
+    database::{
+        table_utility::table,
+        Column, ColumnType, Table, TableRef,
+    },
     scalar::Scalar,
 };
 use rand::Rng;
@@ -11,7 +15,7 @@ pub type OptionalRandBound = Option<fn(usize) -> i64>;
 ///
 /// Will panic if:
 /// - An unsupported `ColumnType` is encountered, triggering a panic in the `todo!()` macro.
-#[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+#[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation, clippy::too_many_lines)]
 pub fn generate_random_columns<'a, S: Scalar>(
     alloc: &'a Bump,
     rng: &mut impl Rng,
@@ -107,9 +111,53 @@ pub fn generate_random_columns<'a, S: Scalar>(
                             alloc.alloc_slice_fill_iter(strs.iter().map(|&s| Into::into(s))),
                         )
                     }
+                    (ColumnType::Decimal75(p, s), _) => {
+                        let strs = alloc.alloc_slice_fill_with(num_rows, |_| {
+                            let len = rng
+                                .gen_range(0..=bound.map(|b| b(num_rows) as usize).unwrap_or(10));
+                            alloc.alloc_str(
+                                &rng.sample_iter(&rand::distributions::Alphanumeric)
+                                    .take(len)
+                                    .map(char::from)
+                                    .collect::<String>(),
+                            ) as &str
+                        });
+                        Column::Decimal75(
+                            *p,
+                            *s,
+                            alloc.alloc_slice_fill_iter(strs.iter().map(|&s| Into::into(s))),
+                        )
+                    }
+                    (ColumnType::TimestampTZ(u, z), None) => Column::TimestampTZ(
+                        *u,
+                        *z,
+                        alloc.alloc_slice_fill_with(num_rows, |_| rng.gen()),
+                    ),
+                    (ColumnType::TimestampTZ(u, z), Some(b)) => Column::TimestampTZ(
+                        *u,
+                        *z,
+                        alloc.alloc_slice_fill_with(num_rows, |_| {
+                            rng.gen_range(-b(num_rows)..=b(num_rows))
+                        }),
+                    ),
                     _ => todo!(),
                 },
             )
         })
         .collect()
+}
+
+/// Generates a random table with the specified name and columns
+pub fn generate_random_table<'a, S: Scalar>(
+    table_name: &str,
+    alloc: &'a Bump,
+    rng: &mut impl Rng,
+    columns: &[(&str, ColumnType, OptionalRandBound)],
+    num_rows: usize,
+) -> IndexMap<TableRef, Table<'a, S>> {
+    indexmap! {
+        TableRef::from_names(None, table_name) => table(
+            generate_random_columns(alloc, rng, columns, num_rows)
+        )
+    }
 }
