@@ -456,6 +456,16 @@ library Verifier {
             }
 
             // IMPORT-YUL ResultVerifier.pre.sol
+            function process_column_variant(column_variant) {
+                revert(0, 0)
+            }
+
+            // IMPORT-YUL ResultVerifier.pre.sol
+            function read_column_entry(column_variant, result_ptr) -> entry, result_ptr_out {
+                revert(0, 0)
+            }
+
+            // IMPORT-YUL ResultVerifier.pre.sol
             function verify_result_evaluations(result_ptr, evaluation_point_ptr, evaluations_ptr) {
                 revert(0, 0)
             }
